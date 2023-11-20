@@ -1,0 +1,10 @@
+Base Strategy:
+
+Pairs Trading Strategy:
+  pairs:
+    - - AAPL
+      - TSLA
+    - - GOOG
+      - AMZN
+    - - XOM
+      - MSFT
