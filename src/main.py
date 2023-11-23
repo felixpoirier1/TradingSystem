@@ -1,9 +1,6 @@
-import dotenv
-dotenv.load_dotenv("config/.env")
 from TradingApp import TradingApp
 from Strategy import BaseStrategy
-from Strategy.pairs_trading_strategy import PairsTradingStrategy
-from alpaca_trade_api import TimeFrame, TimeFrameUnit
+from Strategy.pairs_trading_strategy import *
 import datetime as dt
 import time
 from threading import Thread, Lock, Event
