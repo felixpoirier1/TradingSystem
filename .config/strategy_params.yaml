@@ -1,5 +1,5 @@
 Pairs Trading Strategy:
-  last_updated: '2023-11-22 21:10:56'
+  last_updated: '2023-11-28 15:30:31'
   pairs:
   - - AAPL
     - TSLA
@@ -7,3 +7,7 @@ Pairs Trading Strategy:
     - AMZN
   - - XOM
     - CVX
+  - - JPM
+    - BAC
+  - - WMT
+    - TGT

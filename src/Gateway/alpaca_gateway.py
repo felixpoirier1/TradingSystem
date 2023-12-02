@@ -1,5 +1,6 @@
 import dotenv
 import os
+from .base_gateway import Gateway
 from alpaca_trade_api import REST, Stream
 from alpaca_trade_api.common import URL
 from alpaca_trade_api.entity import Quote
@@ -11,7 +12,7 @@ from pandas import DataFrame
 class Product(Enum):
     STOCK = "stocks"
 
-class TradingApp(REST, Stream):
+class AlpacaGateway(Gateway, REST, Stream):
     dotenv.load_dotenv(".config/.env")
     _API_KEY = os.environ["API_KEY"]
     _API_SECRET_KEY = os.environ["API_SECRET_KEY"]

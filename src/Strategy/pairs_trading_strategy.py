@@ -1,30 +1,23 @@
-from typing import Any
 from .base_strategy import BaseStrategy
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
-from TradingApp import TradingApp
+from Gateway import Gateway
 from sklearn.ensemble import RandomForestRegressor
 import time
 import os
-import sqlite3
 import pandas as pd
 import datetime as dt
 import numpy as np
 import logging
 
-logger = logging.getLogger(__name__)
-logger.setLevel(logging.DEBUG)
-console_handler = logging.StreamHandler()
-console_handler.setLevel(logging.DEBUG)
-logger.addHandler(console_handler)
 
 class PairsTradingStrategy(BaseStrategy):
     NAME = "Pairs Trading Strategy"
     table_name = "pairs_trading"
     _MODEL_PATH = ".models/pairs_trading_model.pkl"
 
-    def __init__(self, app: TradingApp, pairs: list[tuple[str, str]], **kwargs):
-        super().__init__(app)
+    def __init__(self, app: Gateway, pairs: list[list[str, str]], **kwargs):
+        super().__init__(app, **kwargs)
         self.pairs = pairs
 
         # does the model exist?
@@ -41,18 +34,20 @@ class PairsTradingStrategy(BaseStrategy):
         self.temp_table = pd.DataFrame()
 
     def begin(self):
+        super().begin()
         self._instantiate_sqlite_connection()
+        #self._handle_training()
         while not self._eflag.is_set():
-            self.handle_training()
-            break
+            pass
         # on exit
         if self._eflag.is_set():
-            self._store_features(self.temp_table)
+            #self._store_features(self.temp_table)
+            pass
     
     def end(self):
         self._eflag.set()
     
-    def handle_training(self, hard: bool = False):
+    def _handle_training(self, hard: bool = False):
         super().handle_training()
         
         self._manage_data()
@@ -63,13 +58,13 @@ class PairsTradingStrategy(BaseStrategy):
             self.train()
         
         self._store_features(self.temp_table)
-            
+
     def train(self, hard: bool = False):
         for symbol in self.temp_table["symbol"].unique():
-            logger.debug(f"Training model for {symbol}...")
+            logging.debug(f"Training model for {symbol}...")
             df = self.temp_table[self.temp_table["symbol"] == symbol].copy()
             df.drop(columns=["symbol"], inplace=True)
-            df["timestamp"] = pd.to_datetime(df["timestamp"], format="%Y-%m-%d %H:%M:%S+00:00")
+            df["timestamp"] = pd.to_datetime(df["timestamp"], format="%Y-%m-%d %H:%M:%S+00:00", utc = True)
             df_resampled = df.set_index('timestamp').resample('T').ffill()
 
             X = df_resampled.drop(columns=["close", "high", "low"])
@@ -79,7 +74,7 @@ class PairsTradingStrategy(BaseStrategy):
                 self.models[symbol] = self.model_template
 
             self.models[symbol].fit(X, y)
-            logger.debug(f"Trained model for {symbol}.")
+            logging.debug(f"Trained model for {symbol}.")
     
     def predict(self, symbol: str, X: pd.DataFrame):
         return self.models[symbol].predict(X)
@@ -88,11 +83,11 @@ class PairsTradingStrategy(BaseStrategy):
         if subset is None:
             subset = [elem for pair in self.pairs for elem in pair]
         
-        logger.debug(f"Downloading data for {len(subset)} symbols through Alpaca's API...")
+        logging.debug(f"Downloading data for {len(subset)} symbols through Alpaca's API...")
         
         chunk_to_append = self._app.get_bars(subset, "1Min", self._app._fmt_date(start_date), self._app._fmt_date(end_date)).df
 
-        logger.debug(f"Downloaded data for {len(subset)} symbols through Alpaca's API.")
+        logging.debug(f"Downloaded data for {len(subset)} symbols through Alpaca's API.")
         chunk_to_append.reset_index(inplace=True)
         chunk_to_append.dropna(inplace=True)
         self.temp_table = pd.concat([self.temp_table, chunk_to_append])

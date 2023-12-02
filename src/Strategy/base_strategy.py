@@ -1,19 +1,19 @@
-from TradingApp import TradingApp
+from Gateway import Gateway
 from threading import Event
 import yaml
 import datetime as dt
 import sqlite3
+import logging
 
 class BaseStrategy(object):
     NAME = "Base Strategy"
 
-
-    def __init__(self, app: TradingApp):
-        self._app: TradingApp = app
+    def __init__(self, app: Gateway, **general_params):
+        self._app: Gateway = app
         self._eflag: Event = Event()
-    
+        self._general_params = general_params
+        
     def handle_training(self):
-        # write in yaml file "strategy params last updated at: {time}"
         strategy_params = yaml.safe_load(open(".config/strategy_params.yaml", "r"))
         if self.NAME not in strategy_params:
             strategy_params[self.NAME] = {}
@@ -29,9 +29,11 @@ class BaseStrategy(object):
 
     def _instantiate_sqlite_connection(self):
         self.conn = sqlite3.connect(self._app._DB_PATH)
-        
+
     def begin(self):
-        raise NotImplementedError(f"Strategy.begin() not implemented for {self.NAME}")
+        self._app.set_logging(**self._general_params)
 
     def end(self):
         raise NotImplementedError(f"Strategy.end() not implemented for {self.NAME}")
+
+
