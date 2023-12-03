@@ -3,7 +3,6 @@ from threading import Event
 import yaml
 import datetime as dt
 import sqlite3
-import logging
 
 class BaseStrategy(object):
     NAME = "Base Strategy"
