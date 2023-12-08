@@ -2,7 +2,7 @@ from .base_strategy import BaseStrategy
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 from Gateway import Gateway
-from sklearn.ensemble import RandomForestRegressor
+from sklearn.linear_model import LinearRegression
 import time
 import os
 import pandas as pd
@@ -28,7 +28,7 @@ class PairsTradingStrategy(BaseStrategy):
             # if not, create it
             self.model_template = Pipeline([
                 ("StandardScaler", StandardScaler()),
-                ("regressor", RandomForestRegressor())
+                ("regressor", LinearRegression())
             ])
         self.models = {}
         self.temp_table = pd.DataFrame()
@@ -36,12 +36,12 @@ class PairsTradingStrategy(BaseStrategy):
     def begin(self):
         super().begin()
         self._instantiate_sqlite_connection()
-        #self._handle_training()
+        self._handle_training()
         while not self._eflag.is_set():
             pass
         # on exit
         if self._eflag.is_set():
-            #self._store_features(self.temp_table)
+            self._store_features(self.temp_table)
             pass
     
     def end(self):
@@ -60,22 +60,46 @@ class PairsTradingStrategy(BaseStrategy):
         self._store_features(self.temp_table)
 
     def train(self, hard: bool = False):
-        for symbol in self.temp_table["symbol"].unique():
-            logging.debug(f"Training model for {symbol}...")
-            df = self.temp_table[self.temp_table["symbol"] == symbol].copy()
-            df.drop(columns=["symbol"], inplace=True)
-            df["timestamp"] = pd.to_datetime(df["timestamp"], format="%Y-%m-%d %H:%M:%S+00:00", utc = True)
-            df_resampled = df.set_index('timestamp').resample('T').ffill()
+        for pair in self.pairs:
+            ass_numerator = pair[0]
+            ass_denominator = pair[1]
+            logging.debug(f"Training model for {ass_numerator, ass_denominator}...")
+            numerator = self.temp_table[self.temp_table["symbol"] == ass_numerator].copy()
+            denominator = self.temp_table[self.temp_table["symbol"] == ass_denominator].copy()
+            numerator.drop(columns=["symbol"], inplace=True)
+            denominator.drop(columns=["symbol"], inplace=True)
+            numerator["timestamp"] = pd.to_datetime(numerator["timestamp"], format="%Y-%m-%d %H:%M:%S+00:00", utc = True)
+            numerator = numerator.set_index('timestamp').resample('T').ffill()
+            denominator["timestamp"] = pd.to_datetime(denominator["timestamp"], format="%Y-%m-%d %H:%M:%S+00:00", utc = True)
+            denominator = denominator.set_index('timestamp').resample('T').ffill()
+            df_resampled = pd.concat([numerator["close"].to_frame("numerator"), denominator["close"].to_frame("denominator")], axis=1)
+            df_resampled.dropna(inplace=True)
+            df_resampled["close"] = df_resampled["numerator"]/df_resampled["denominator"]
+            df_resampled["return_vol_1h"] = df_resampled["close"].pct_change().rolling(60).std()
+            df_resampled["return_vol_30m"] = df_resampled["close"].pct_change().rolling(30).std()
+            df_resampled["return_vol_10m"] = df_resampled["close"].pct_change().rolling(30).std()
+            df_resampled["rolling_mean"] = df_resampled["close"].shift(30).rolling(60).mean()
+            df_resampled.dropna(inplace=True)
+            df_resampled["reversal"] = None
+            # assign reversal to 1 if df["close"] is within 10% of the mean now or in the next 30 minutes
+            for num, idx in enumerate(df_resampled.index):
+                if num + 30 > len(df_resampled):
+                    break
+                if any(df_resampled["close"].iloc[num:num+30] >= df_resampled["rolling_mean"].iloc[num:num+30] * 1.005) or any(df_resampled["close"].iloc[num:num+30] <= df_resampled["rolling_mean"].iloc[num:num+30] * 0.995):
+                    df_resampled.loc[idx, "reversal"] = 1
+                else:
+                    df_resampled.loc[idx, "reversal"] = 0
+            df_resampled.to_csv("fun.csv")
+            df_resampled.dropna(inplace=True)
 
-            X = df_resampled.drop(columns=["close", "high", "low"])
-            y = df_resampled["close"]
+            X = df_resampled[["close", "return_vol_1h", "return_vol_30m", "return_vol_10m"]].shift(1).dropna()
+            X = X.astype(np.float64)
+            y = df_resampled["reversal"].iloc[1:]
 
-            if symbol not in self.models or hard:
-                self.models[symbol] = self.model_template
+            if tuple(pair) not in self.models or hard:
+                self.models[tuple(pair)] = self.model_template
 
-            self.models[symbol].fit(X, y)
-            logging.debug(f"Trained model for {symbol}.")
-    
+            self.models[tuple(pair)].fit(X, y)    
     def predict(self, symbol: str, X: pd.DataFrame):
         return self.models[symbol].predict(X)
 
@@ -116,7 +140,7 @@ class PairsTradingStrategy(BaseStrategy):
         """
         df.to_sql(self.table_name, self.conn, if_exists="replace", index=False)
         self.conn.commit()
-        print("Stored features in database.")
+        logging.debug("Stored features in database.")
 
     @staticmethod
     def _worst_last_date(df: pd.DataFrame) -> np.datetime64:

@@ -33,6 +33,7 @@ class Engine:
         logging.debug(f"Strategy params loaded from {self._STRATEGY_PARAMS_PATH}")
         self._strategy_params = yaml.safe_load(open(self._STRATEGY_PARAMS_PATH, "r"))
 
+        self._setup_db()
     def _parse_arguments(self):
         self.parser = argparse.ArgumentParser(description='Process command line inputs into a dictionary.')
         for arg_template in ARGUMENT_TEMPLATES:
@@ -44,7 +45,13 @@ class Engine:
 
         self.template=yaml.safe_load(open(self._LOGGING_PARAMS_PATH, "r"))
 
-
+    def _setup_db(self):
+        dirname = os.path.dirname(self.app._DB_PATH)
+        if not os.path.exists(dirname): os.mkdir(dirname)
+        if not os.path.exists(self.app._DB_PATH):
+            with open(self.app._DB_PATH, "w"):
+                pass
+            
     def launch(self):
         logging.debug("Launching streaming thread")
         self._launch_stream()
