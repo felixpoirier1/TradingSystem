@@ -9,7 +9,7 @@ import pandas as pd
 import datetime as dt
 import numpy as np
 import logging
-
+import pickle
 
 class PairsTradingStrategy(BaseStrategy):
     NAME = "Pairs Trading Strategy"
@@ -37,8 +37,64 @@ class PairsTradingStrategy(BaseStrategy):
         super().begin()
         self._instantiate_sqlite_connection()
         self._handle_training()
+        self._download_latest_data()
+        for pair in self.pairs:
+            nominator = self.temp_table[pair[0]]
+            denominator = self.temp_table[pair[1]]
+            nominator.drop(columns=["symbol"], inplace=True)
+            denominator.drop(columns=["symbol"], inplace=True)
+            nominator["timestamp"] = pd.to_datetime(nominator["timestamp"], format="%Y-%m-%d %H:%M:%S+00:00", utc = True)
+            nominator = nominator.set_index('timestamp').resample('T').ffill()
+            denominator["timestamp"] = pd.to_datetime(denominator["timestamp"], format="%Y-%m-%d %H:%M:%S+00:00", utc = True)
+            denominator = denominator.set_index('timestamp').resample('T').ffill()
+            denominator = pair[1]
+            self.fast_data[tuple(pair)] = pd.concat([nominator["close"].to_frame("numerator"), denominator["close"].to_frame("denominator")], axis=1)
+            self.fast_data.dropna(inplace=True)
+            self.fast_data["close"] = self.fast_data["numerator"]/self.fast_data["denominator"]
+            self.fast_data["return_vol_1h"] = self.fast_data["close"].pct_change().rolling(60).std()
+            self.fast_data["return_vol_30m"] = self.fast_data["close"].pct_change().rolling(30).std()
+            self.fast_data["return_vol_10m"] = self.fast_data["close"].pct_change().rolling(30).std()
+            self.fast_data["rolling_mean"] = self.fast_data["close"].shift(30).rolling(60).mean()
+            self.fast_data.dropna(inplace=True)
+        self.commitment = {tuple(pair):False for pair in self.pairs}
         while not self._eflag.is_set():
-            pass
+            for pair in self.pairs:
+                if self.fast_data.index[-1] < self._app.hist_quotes[pair[1]].index[-1] \
+                    and self.fast_data.index[-1] < self._app.hist_quotes[pair[1]].index[-1]:
+                    latest_common_date = min(self._app.hist_quotes[pair[0]].index[-1], self._app.hist_quotes[pair[1]].index[-1])
+                    data_to_append = self._app.hist_quotes[pair[0]].loc[latest_common_date].to_frame("numerator").join(self._app.hist_quotes[pair[1]].loc[latest_common_date].to_frame("denominator"))
+                    data_to_append["close"] = data_to_append["numerator"]/data_to_append["denominator"]
+                    self.fast_data = self.fast_data.append(data_to_append)
+                    self.fast_data["return_vol_1h"] = self.fast_data["close"].pct_change().rolling(60).std()
+                    self.fast_data["return_vol_30m"] = self.fast_data["close"].pct_change().rolling(30).std()
+                    self.fast_data["return_vol_10m"] = self.fast_data["close"].pct_change().rolling(30).std()
+                    self.fast_data["rolling_mean"] = self.fast_data["close"].shift(30).rolling(60).mean()
+
+                prediction = self.models[tuple(pair)].predict(self.fast_data[[
+                            "close", 
+                            "return_vol_1h", 
+                            "return_vol_30m", 
+                            "return_vol_10m",
+                            "rolling_mean"
+                            ]].iloc[-1].to_frame().T)
+
+                if prediction == 1 and self._app.get_account().status == "ACTIVE" \
+                    and self._app.get_position(pair[0]) is None \
+                        and self._app.get_position(pair[1]) is None \
+                            and self.commitment[tuple(pair)] == False:
+                    if self.fast_data.iloc[-1]["close"] > self.fast_data.iloc[-1]["rolling_mean"] * 1.005:
+                        self._app.submit_order(pair[0], 1, "sell", "market", "day")
+                        self._app.submit_order(pair[1], 1, "buy", "market", "day")
+                    elif self.fast_data.iloc[-1]["close"] < self.fast_data.iloc[-1]["rolling_mean"] * 0.995:
+                        self._app.submit_order(pair[0], 1, "buy", "market", "day")
+                        self._app.submit_order(pair[1], 1, "sell", "market", "day")
+                elif prediction == 0:
+                    if self._app.get_position(pair[0]) is not None:
+                        self._app.submit_order(pair[0], 1, "sell", "market", "day")
+                    if self._app.get_position(pair[1]) is not None:
+                        self._app.submit_order(pair[1], 1, "sell", "market", "day")
+                    self.commitment[tuple(pair)] = False
+            time.sleep(1)
         # on exit
         if self._eflag.is_set():
             self._store_features(self.temp_table)
@@ -47,6 +103,9 @@ class PairsTradingStrategy(BaseStrategy):
     def end(self):
         self._eflag.set()
     
+    def _download_latest_data(self):
+        if self.temp_table.empty:
+            self._get_data(start_date=pd.Timestamp.now() - pd.Timedelta(days=1), end_date=pd.Timestamp.now())
     def _handle_training(self, hard: bool = False):
         super().handle_training()
         
@@ -92,7 +151,7 @@ class PairsTradingStrategy(BaseStrategy):
             df_resampled.to_csv("fun.csv")
             df_resampled.dropna(inplace=True)
 
-            X = df_resampled[["close", "return_vol_1h", "return_vol_30m", "return_vol_10m"]].shift(1).dropna()
+            X = df_resampled[["close", "return_vol_1h", "return_vol_30m", "return_vol_10m", "rolling_mean"]].shift(1).dropna()
             X = X.astype(np.float64)
             y = df_resampled["reversal"].iloc[1:]
 
@@ -115,6 +174,7 @@ class PairsTradingStrategy(BaseStrategy):
         chunk_to_append.reset_index(inplace=True)
         chunk_to_append.dropna(inplace=True)
         self.temp_table = pd.concat([self.temp_table, chunk_to_append])
+        return self.temp_table
     
     def _extract_features(self, start_date: dt.datetime = None, end_date: dt.datetime = None):
         """Returns a dataframe representing the features of the model contained in the database.
@@ -184,3 +244,6 @@ class PairsTradingStrategy(BaseStrategy):
     @classmethod
     def _model_exists(cls):
         return os.path.exists(cls._MODEL_PATH)
+
+    def _save_model(self):
+        pickle.dump(self.models, "")

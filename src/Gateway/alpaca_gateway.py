@@ -28,6 +28,7 @@ class AlpacaGateway(Gateway, REST, Stream):
 
         self.watchlist = []
         self.latest_quotes = {}
+        self.hist_quotes = {i:DataFrame() for i in self.watchlist}
 
     ## Streaming methods ##
     def beginStream(self):
@@ -45,6 +46,9 @@ class AlpacaGateway(Gateway, REST, Stream):
     
     async def quote_callback(self, quote: Quote):
         self.latest_quotes[quote.symbol] = quote
+        if quote.symbol not in self.hist_quotes:
+            self.hist_quotes[quote.symbol] = DataFrame()
+        self.hist_quotes[quote.symbol] = self.hist_quotes[quote.symbol].append(quote._raw)
 
     ## General methods ##
     @staticmethod

@@ -88,3 +88,6 @@ target/
 # IPython
 profile_default/
 ipython_config.py
+
+# Homework
+homework/
