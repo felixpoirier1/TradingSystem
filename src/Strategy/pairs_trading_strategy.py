@@ -106,6 +106,7 @@ class PairsTradingStrategy(BaseStrategy):
     def _download_latest_data(self):
         if self.temp_table.empty:
             self._get_data(start_date=pd.Timestamp.now() - pd.Timedelta(days=1), end_date=pd.Timestamp.now())
+
     def _handle_training(self, hard: bool = False):
         super().handle_training()
         
@@ -159,6 +160,7 @@ class PairsTradingStrategy(BaseStrategy):
                 self.models[tuple(pair)] = self.model_template
 
             self.models[tuple(pair)].fit(X, y)    
+ 
     def predict(self, symbol: str, X: pd.DataFrame):
         return self.models[symbol].predict(X)
 
@@ -229,7 +231,6 @@ class PairsTradingStrategy(BaseStrategy):
         worst_last_date = self._worst_last_date(self.temp_table)
         if worst_last_date < pd.Timestamp.now() - pd.Timedelta(days=1):
             self._get_data(start_date=worst_last_date)
-    
 
     def _pairs_trading_table_exists(self):
         c = self.conn.cursor()

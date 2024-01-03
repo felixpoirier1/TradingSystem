@@ -16,6 +16,7 @@ class Engine:
     NAME = "ENGINE"
     _STRATEGY_PARAMS_PATH = ".config/strategy_params.yaml"
     _LOGGING_PARAMS_PATH = ".config/logging_config.yaml"
+    
     def __init__(self, app: Gateway):
         self._parse_arguments()
         init_logging(
@@ -90,7 +91,6 @@ class Engine:
         self.stream_thread.join()
         print(colorama.Fore.BLUE, "Stream thread joined", colorama.Style.RESET_ALL)
         
-
     def _launch_strategies(self):
         self.strategy_threads = []
         self.strategy_objs = []
@@ -105,7 +105,6 @@ class Engine:
                 logging.debug(f"{strategy.NAME} thread started")
                 self.strategy_threads.append(strategy_thread)
         
-    
     def _close_strategies(self):
         for strategy_obj, strategy_thread in zip(self.strategy_objs, self.strategy_threads):
             logging.debug(f"Ending {strategy_obj.NAME}")

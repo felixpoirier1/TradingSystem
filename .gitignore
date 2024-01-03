@@ -91,3 +91,6 @@ ipython_config.py
 
 # Homework
 homework/
+
+# Temporary file
+temp.py

@@ -13,12 +13,12 @@ class Product(Enum):
     STOCK = "stocks"
 
 class AlpacaGateway(Gateway, REST, Stream):
+    NAME = "AlpacaGateway"
     dotenv.load_dotenv(".config/.env")
-    _API_KEY = os.environ["API_KEY"]
-    _API_SECRET_KEY = os.environ["API_SECRET_KEY"]
+    _API_KEY = os.environ["ALPACA_API_KEY"]
+    _API_SECRET_KEY = os.environ["ALPACA_API_SECRET_KEY"]
     _base_url = 'https://paper-api.alpaca.markets'
     _data_base_url = 'https://data.alpaca.markets'
-    _DB_PATH = "data/data.db"
     _header = {"accept": "application/json", "APCA-API-KEY-ID": _API_KEY, "APCA-API-SECRET-KEY": _API_SECRET_KEY}
 
     def __init__(self):
