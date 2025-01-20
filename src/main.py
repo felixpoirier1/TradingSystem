@@ -1,8 +1,8 @@
-from Gateway import AlpacaGateway
+from Gateway import TWSGateway
 from Engine import Engine
 
 def main():
-    app = AlpacaGateway()
+    app = TWSGateway()
     engine = Engine(app)
     engine.launch()
 

@@ -1,1 +1,2 @@
 from .base_strategy import BaseStrategy
+from .pairs_trading_strategy import PairsTradingStrategy

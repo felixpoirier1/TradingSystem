@@ -5,11 +5,11 @@ formatters:
     format: '%(asctime)s [%(levelname)s] [%(threadName)s] %(message)s'
 handlers:
   default:
-    level: 20  # Numeric value for logging.INFO
+    level: 10  # Numeric value for logging.INFO
     formatter: standard
     class: logging.StreamHandler
   thread_file_handler:
-    level: 20  # Numeric value for logging.INFO
+    level: 10  # Numeric value for logging.INFO
     formatter: standard
     class: logging.FileHandler
     filename: ''
@@ -18,6 +18,6 @@ loggers:
     handlers:
       - default
       - thread_file_handler
-    level: 20  # Numeric value for logging.INFO
+    level: 10  # Numeric value for logging.INFO
     propagate: true
 

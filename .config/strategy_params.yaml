@@ -1,5 +1,5 @@
 Pairs Trading Strategy:
-  last_updated: '2023-12-07 21:05:32'
+  last_updated: '2025-01-17 16:22:31'
   pairs:
   - - AAPL
     - TSLA
@@ -11,3 +11,5 @@ Pairs Trading Strategy:
     - BAC
   - - WMT
     - TGT
+TWS Unit Test:
+  last_updated: '2025-01-15 02:48:07'
