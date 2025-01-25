@@ -84,6 +84,7 @@ target/
 
 # Jupyter Notebook
 notebooks/
+*.ipynb
 .ipynb_checkpoints
 
 # IPython
