@@ -1,4 +1,4 @@
-from Gateway import Gateway
+from Gateway import *
 from Client import *
 from Strategy import *
 import time
@@ -9,16 +9,18 @@ import sys
 import argparse
 import logging
 import os
+from typing import List
 
 from utils import ARGUMENT_TEMPLATES, init_logging, get_leaf_classes
 
 
 class Engine:
     NAME = "ENGINE"
+    _GATEWAY_PARAMS_PATH = ".config/gateway_params.yaml"
     _CLIENT_PARAMS_PATH = ".config/client_params.yaml"
     _LOGGING_PARAMS_PATH = ".config/logging_config.yaml"
     
-    def __init__(self, app: Gateway):
+    def __init__(self):
         self._parse_arguments()
         init_logging(
             self.template,
@@ -26,16 +28,23 @@ class Engine:
             )
         logging.debug("All arguments parsed")
 
-        self.app = app
+        self._gateway_params: Dict = yaml.safe_load(open(self._GATEWAY_PARAMS_PATH, "r"))
+
+        self.gateways: Dict[str, Gateway] = {}
+        for gateway_name, gateway_args in self._gateway_params.items():
+            for gw in Gateway.__subclasses__():
+                if gw.NAME == gateway_name:
+                    self.gateways[gateway_name] = gw(**gateway_args)
 
         logging.debug("Initializing streaming thread")
-        self.stream_thread = Thread(target=self.__init__stream, name="StreamThread", daemon=True, args=(self.app, *[]))
+        self.stream_threads = [Thread(target=self.__init__stream, name=f"{gw_name}StreamThread", daemon=True, args=(gw_obj,)) for gw_name, gw_obj in self.gateways.items()]
         logging.debug("Streaming thread has been initialized")
 
         logging.debug(f"Client params loaded from {self._CLIENT_PARAMS_PATH}")
         self._client_params = yaml.safe_load(open(self._CLIENT_PARAMS_PATH, "r"))
-
+        
         self._setup_db()
+
     def _parse_arguments(self):
         self.parser = argparse.ArgumentParser(description='Process command line inputs into a dictionary.')
         for arg_template in ARGUMENT_TEMPLATES:
@@ -48,15 +57,15 @@ class Engine:
         self.template=yaml.safe_load(open(self._LOGGING_PARAMS_PATH, "r"))
 
     def _setup_db(self):
-        dirname = os.path.dirname(self.app._DB_PATH)
-        if not os.path.exists(dirname): os.mkdir(dirname)
-        if not os.path.exists(self.app._DB_PATH):
-            with open(self.app._DB_PATH, "w"):
-                pass
-            
+        for gw in self.gateways.values():
+            dirname = os.path.dirname(gw._DB_PATH)
+            if not os.path.exists(dirname): os.mkdir(dirname)
+            if not os.path.exists(gw._DB_PATH):
+                open(gw._DB_PATH, "x")
+                
     def launch(self):
         logging.debug("Launching streaming thread")
-        self._launch_stream()
+        self._launch_streams()
         logging.debug("Launching client threads")
         self._launch_clients()
         logging.debug("Launching CLI interface")
@@ -69,13 +78,11 @@ class Engine:
                 print("Quitting...")
                 self.close()
                 break
-            elif buff == "a":
-                print(self.app.get_account().status)
             time.sleep(1)
 
     def close(self):
         self._close_clients()
-        self._close_stream()
+        self._close_streams()
 
         exit(0)
     
@@ -83,23 +90,32 @@ class Engine:
     def __init__stream(app):
         app.beginStream()
 
-    def _launch_stream(self):
-        self.stream_thread.start()
+    def _launch_streams(self):
+        for st in self.stream_threads:
+            st.start()
         time.sleep(2)
     
-    def _close_stream(self):
-        self.app.endStream()
-        self.stream_thread.join()
-        print(colorama.Fore.BLUE, "Stream thread joined", colorama.Style.RESET_ALL)
+    def _close_streams(self):
+        for gw in self.gateways:
+            gw.endStream()
+        for st in self.stream_threads:
+            st.join()
+            print(colorama.Fore.BLUE, f"{st.name} joined", colorama.Style.RESET_ALL)
         
     def _launch_clients(self):
         self.client_threads = []
         self.client_objs = []
+        # iterating through every client
         for client in get_leaf_classes(BaseClient):
-            if client.NAME in self._client_params:
+            # checking if client is activated in YAML config file
+            if self._client_params and client.NAME in self._client_params:
                 logging.debug(f"Launching {client.NAME}")
-                client_obj = client(self.app, **{**self._client_params[client.NAME], "template": self.template, **self._general_params})
+                # since gateways are shared across clients, we pass a reference of all gateways already created
+                gateways = [self.gateways[gw_name] for gw_name in self._client_params[client.NAME].pop("gateways")]
+                # create client obj (strategy, test, etc.)
+                client_obj = client(gateways, **{**self._client_params[client.NAME], "template": self.template, **self._general_params})
                 self.client_objs.append(client_obj)
+                # create thread for client
                 client_thread = Thread(target=client_obj.begin, name=client.NAME)
                 logging.debug(f"Attached {client.NAME} object to thread named {client_thread.name}")
                 client_thread.start()

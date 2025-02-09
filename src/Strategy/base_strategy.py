@@ -13,12 +13,12 @@ class BaseStrategy(BaseClient):
         if self.NAME not in strategy_params:
             strategy_params[self.NAME] = {}
         
-        if strategy_params[self.NAME].get("last_updated") is not None:
-            self.last_updated = dt.datetime.strptime(strategy_params[self.NAME]["last_updated"], "%Y-%m-%d %H:%M:%S")
+        if strategy_params[self.NAME].get("last_trained") is not None:
+            self.last_trained = dt.datetime.strptime(strategy_params[self.NAME]["last_trained"], "%Y-%m-%d %H:%M:%S")
         else:
-            self.last_updated = None
+            self.last_trained = None
 
-        strategy_params[self.NAME]["last_updated"] = dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        strategy_params[self.NAME]["last_trained"] = dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         
         yaml.safe_dump(strategy_params, open(".config/client_params.yaml", "w"))
 

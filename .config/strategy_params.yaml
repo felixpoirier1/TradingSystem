@@ -1,4 +1,5 @@
 Pairs Trading Strategy:
+  gateway: PolymarketGateway
   last_updated: '2025-01-17 16:22:31'
   pairs:
   - - AAPL
@@ -11,5 +12,7 @@ Pairs Trading Strategy:
     - BAC
   - - WMT
     - TGT
+
 TWS Unit Test:
+  gateway: TWSGateway
   last_updated: '2025-01-15 02:48:07'

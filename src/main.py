@@ -1,9 +1,8 @@
-from Gateway import TWSGateway
+from Gateway import PolymarketGateway
 from Engine import Engine
 
 def main():
-    app = TWSGateway()
-    engine = Engine(app)
+    engine = Engine()
     engine.launch()
 
 if __name__ == "__main__":

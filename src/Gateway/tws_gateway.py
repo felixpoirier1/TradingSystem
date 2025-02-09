@@ -122,13 +122,9 @@ class TWSGateway(EWrapper, EClient, Gateway):
     def establish_connection(self):
         self.connect(host='127.0.0.1', port=7496, clientId=23)
 
-    def begin(self):
-        """Gateway is a websocket, hence it requires it's own thread"""
-        self.run()
-
     def beginStream(self):
         self.establish_connection()
-        self.begin()
+        self.run()
 
     def endStream(self):
         pass
