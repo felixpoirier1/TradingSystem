@@ -100,3 +100,5 @@ temp.py
 # VS Code
 .vscode/
 .config/kalshi-api-key.key
+
+.DS_Store
