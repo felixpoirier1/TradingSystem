@@ -8,7 +8,7 @@ import json
 import time
 from datetime import datetime, timedelta
 from threading import Lock, Thread, Event
-from websocket import WebSocketApp
+from websocket import WebSocketApp, WebSocketConnectionClosedException
 
 from .base_gateway import Gateway
 from trading.order_types import Side
@@ -58,18 +58,25 @@ class PolymarketGateway(Gateway):
         chain_id: int = POLYGON
         self.client = ClobClient(self._rest_host, key=self._api_key, chain_id=chain_id)
         self.client.set_api_creds(self.client.create_or_derive_api_creds())
+
+    def ping(self, ws):
+        while not self.ping_thread_stop_event.is_set():
+            try:
+                time.sleep(5)
+                ws.send("PING")
+            except WebSocketConnectionClosedException:
+                logging.debug("Ping thread detected closed connection, exiting.")
+                break
+            except Exception as e:
+                logging.error(f"Error in ping thread: {e}")
+                break
     
     def __stream_market_on_open(self, ws: WebSocketApp):
         logging.debug("Polymarket stream connection opened")
         ws.send(json.dumps(self.market_subscription_message))
-
-        def ping():
-            while True:
-                time.sleep(5)
-                ws.send("PING")
-
-        thread = Thread(target=ping)
-        thread.start()
+        self.ping_thread_stop_event = Event() 
+        self.ping_thread = Thread(target=self.ping, args=(ws,))
+        self.ping_thread.start()
 
     def __stream_market_on_message(self, ws, message):
         try:
@@ -85,12 +92,34 @@ class PolymarketGateway(Gateway):
                         f.write(json.dumps(resp) + "\n")
         except Exception as e:
             print(e)
-
-
             
     def __stream_market_on_error(self, ws, error):
-        logging.ERROR(f"Polymarket returned error code {str(error)}")
-    def __stream_market_on_close(self, ws, close_status_code, close_msg): return
+        logging.error("Error was sent")
+
+    def __stream_market_on_close(self, ws, close_status_code, close_msg):
+        logging.info(f"WebSocket closed: {close_status_code}, {close_msg}. Reconnecting...")
+        # ensure ping thread is stopped
+        self.ping_thread_stop_event.set()
+        if self.ping_thread:
+            self.ping_thread.join()
+            self.ping_thread = None
+
+        self.last_retry = getattr(self, "last_retry", datetime.min)
+
+        # if last retry was more than 1h ago, restart retry counter
+        if (datetime.now() - self.last_retry).seconds/60/60 > 1:
+            self.retry_count = 1
+        else:
+            self.retry_count = getattr(self, "retry_count", 0) + 1
+        self.last_retry = datetime.now()
+
+        # if more than 10 retries within last hour, stop trying to connect
+        if self.retry_count > 10:
+            logging.error("Did not manage to re-establish connection with Polymarket socket API.")
+        # try to connect otherwise, using exponential wait times
+        else:
+            time.sleep(min(2**(self.retry_count), 60))
+            self.__stream_market()
 
     def __stream_market(self):
         ws = WebSocketApp(f"{self._stream_host}/ws/market",
