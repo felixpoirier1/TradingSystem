@@ -1,5 +1,5 @@
 # **Trading System**
-*a fun Python wrapper to build trading bots on TWS*
+*a fun Python wrapper to build trading bots on multiple exchanges*
 
 | Badge | Description |
 |-------|-------------|
