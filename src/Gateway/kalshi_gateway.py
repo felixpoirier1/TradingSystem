@@ -9,22 +9,28 @@ import time
 from datetime import datetime, timedelta
 from threading import Lock, Thread, Event
 from websocket import WebSocketApp, WebSocketConnectionClosedException
+import asyncio
 
 from .base_gateway import Gateway
 from trading.order_types import Side
 from typing import List, Dict
 import logging
-from utils.kalshi_api_key_decryption import load_private_key_from_file, sign_pss_text
+from utils.kalshi_api_key_decryption import load_private_key_from_file
 import requests as r
+import base64
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.asymmetric import padding, rsa
+from cryptography.exceptions import InvalidSignature
+
 
 class KalshiGateway(Gateway):
-    NAME = "PolymarketGateway"
+    NAME = "KalshiGateway"
     dotenv.load_dotenv(".config/.env")
     _api_key_filepath = ".config/kalshi-api-key.key"
     _api_key = load_private_key_from_file(_api_key_filepath)
     _api_key_id = os.environ["KALSHI_API_KEY_ID"]
     _rest_host = "https://api.elections.kalshi.com"
-    _stream_host = "wss://api.elections.kalshi.com/trade-api/ws/v2"
+    _stream_host = "wss://api.elections.kalshi.com"
     _markets_dir = "data/kalshi_markets.json"
 
     def __init__(self, subscribed_markets: List[str]):
@@ -45,10 +51,44 @@ class KalshiGateway(Gateway):
         self.market_msgs: Dict[str, List] = {id: [] for id in self.subscribed_markets}
         self.msg_id = 1
 
+    def __header(self, method, path):
+        current_time_milliseconds = int(time.time() * 1000)
+        timestamp_str = str(current_time_milliseconds)
+        msg_string = timestamp_str + method + path  # String to be signed
+        logging.info(f"msg_string: {msg_string}")  # Print for inspection
+
+        sig = self.__sign_pss_text(msg_string)
+
+        headers = {
+            'Content-Type': 'application/json',  # Important for POST requests with JSON body
+            'KALSHI-ACCESS-KEY': self._api_key_id,
+            'KALSHI-ACCESS-SIGNATURE': sig,
+            'KALSHI-ACCESS-TIMESTAMP': timestamp_str
+        }
+        logging.info(str(headers))
+        return headers
+
+    def __sign_pss_text(self, text: str) -> str:
+        """Signs the text using RSA-PSS and returns the base64 encoded signature."""
+        message = text.encode('utf-8')
+        try:
+            signature = self._api_key.sign(
+                message,
+                padding.PSS(
+                    mgf=padding.MGF1(hashes.SHA256()),
+                    salt_length=padding.PSS.DIGEST_LENGTH
+                ),
+                hashes.SHA256()
+            )
+            return base64.b64encode(signature).decode('utf-8')
+        except InvalidSignature as e:
+            raise ValueError("RSA sign PSS failed") from e
+        
     def __get(self, endpoint, params, headers = None, ret_type="json"):
+        path = KalshiGateway._rest_host + endpoint
         if headers is None:
-            headers = {"accept": "application/json"}
-        resp = r.get(KalshiGateway._rest_host + endpoint, params=params, headers=headers)
+            headers = self.__header("GET", path)
+        resp = r.get(path, params=params, headers=headers)
         if ret_type == "json":
             return resp.json()
         else:
@@ -102,30 +142,10 @@ class KalshiGateway(Gateway):
             self.__market_th.run()
         except KeyboardInterrupt:
             self.__market_th.join()
-
-    def __connect(self):
-        chain_id: int = POLYGON
-        self.client = ClobClient(self._rest_host, key=self._api_key, chain_id=chain_id)
-        self.client.set_api_creds(self.client.create_or_derive_api_creds())
-
-    def ping(self, ws):
-        while not self.ping_thread_stop_event.is_set():
-            try:
-                time.sleep(5)
-                ws.send("PING")
-            except WebSocketConnectionClosedException:
-                logging.debug("Ping thread detected closed connection, exiting.")
-                break
-            except Exception as e:
-                logging.error(f"Error in ping thread: {e}")
-                break
     
     def __stream_market_on_open(self, ws: WebSocketApp):
-        logging.debug("Polymarket stream connection opened")
+        logging.debug("Kalshi stream connection opened")
         ws.send(json.dumps(self.market_subscription_message))
-        self.ping_thread_stop_event = Event() 
-        self.ping_thread = Thread(target=self.ping, args=(ws,))
-        self.ping_thread.start()
 
     def __stream_market_on_message(self, ws, message):
         # try:
@@ -141,18 +161,13 @@ class KalshiGateway(Gateway):
         #                 f.write(json.dumps(resp) + "\n")
         # except Exception as e:
         #     print(e)
-        print(message)
+        logging.debug(str(message))
             
     def __stream_market_on_error(self, ws, error):
-        logging.error("Error was sent")
+        logging.error(f"Error was sent:\n{error}")
 
     def __stream_market_on_close(self, ws, close_status_code, close_msg):
         logging.info(f"WebSocket closed: {close_status_code}, {close_msg}. Reconnecting...")
-        # ensure ping thread is stopped
-        self.ping_thread_stop_event.set()
-        if self.ping_thread:
-            self.ping_thread.join()
-            self.ping_thread = None
 
         self.last_retry = getattr(self, "last_retry", datetime.min)
 
@@ -172,22 +187,27 @@ class KalshiGateway(Gateway):
             self.__stream_market()
 
     def __stream_market(self):
-        ws = WebSocketApp(f"{self._stream_host}/trade-api/ws/v2",
+        url_suffix = "/trade-api/ws/v2"
+        logging.info(f"{self._stream_host}{url_suffix}")
+        ws = WebSocketApp(f"{self._stream_host}{url_suffix}",
+            header = self.__header("GET", url_suffix),
             on_open = self.__stream_market_on_open,
             on_message = self.__stream_market_on_message,
             on_error = self.__stream_market_on_error,
             on_close = self.__stream_market_on_close)
+        logging.debug(self.subscribed_markets)
         self.market_subscription_message = {
             "id": self.msg_id,
             "cmd": "subscribe",
             "params": {
-                'channels': ['orderbook_delta', 'trade', 'fill'],
-                'markets': self.subscribed_markets
+                'channels': ['orderbook_delta'],
+                'market_tickers': self.subscribed_markets
             }
         }
+        logging.debug("Launching websocket")
+        ws.run_forever()
 
     def beginStream(self):
-        self.__connect()
         self.__market_th = Thread(target=self.__stream_market)
         self.__market_th.start()
 

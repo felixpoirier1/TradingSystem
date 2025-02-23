@@ -1,3 +1,4 @@
 from .base_strategy import BaseStrategy
 from .pairs_trading_strategy import PairsTradingStrategy
 from .polymarket_mm_strategy import PolymarketMMStrategy
+from .kalshi_mm_strategy import KalshiMMStrategy

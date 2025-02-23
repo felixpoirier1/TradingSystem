@@ -16,5 +16,8 @@ class BaseClient(object):
 
     def end(self):
         raise NotImplementedError(f"Strategy.end() not implemented for {self.NAME}")
+    
+    def __repr__(self):
+        return self.NAME
 
 

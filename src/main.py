@@ -1,4 +1,4 @@
-from Gateway import PolymarketGateway
+from Gateway import KalshiGateway
 from Engine import Engine
 
 def main():

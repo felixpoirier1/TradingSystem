@@ -9,17 +9,19 @@ import time
 from datetime import datetime, timedelta
 from threading import Lock, Thread, Event
 from websocket import WebSocketApp, WebSocketConnectionClosedException
+import requests
+from typing import List, Dict
+import logging
 
 from .base_gateway import Gateway
 from trading.order_types import Side
-from typing import List, Dict
-import logging
 
 class PolymarketGateway(Gateway):
     NAME = "PolymarketGateway"
     dotenv.load_dotenv(".config/.env")
     _api_key = os.environ["POLYMARKET_API_KEY"]
     _rest_host = "https://clob.polymarket.com"
+    _gamma_host = "https://gamma-api.polymarket.com"
     _stream_host = "wss://ws-subscriptions-clob.polymarket.com"
     _markets_dir = "data/polymarket_markets.json"
     _chain_id = POLYGON
@@ -144,13 +146,28 @@ class PolymarketGateway(Gateway):
     
     def _download_markets(self, obj_vector, evt: Event):
         # download from polymarket
-        next_cursor = ""
+        limit = 100  # Set the number of items to fetch per request
+        offset = 0
+
         while True:
-            resp = self.client.get_markets(next_cursor)
-            obj_vector += resp['data']
-            next_cursor = resp['next_cursor']
-            logging.debug(f"Fetched markets, received next cursor {next_cursor}")
-            if resp['next_cursor'] == "LTE=":
+            params = {
+                "order": "createdAt",
+                "ascending": "True",
+                "archived": "false",
+                "active": "true",
+                "closed": "false",
+                "limit": limit,
+                "offset": offset
+            }
+
+            response = requests.get(self._gamma_host + "/markets", params=params)
+            response_data = response.json()  # Convert the response to JSON
+            
+            # Check if there's data in the response
+            if isinstance(response_data, list) and response_data:
+                obj_vector.extend(response_data)  # Add the current page of markets to the list
+                offset += limit  # Move to the next set of data
+            else:
                 break
         # set event flag to false
         evt.set()

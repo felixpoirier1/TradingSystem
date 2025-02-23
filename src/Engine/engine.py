@@ -92,6 +92,7 @@ class Engine:
 
     def _launch_streams(self):
         for st in self.stream_threads:
+            logging.debug(f"Launching {st.name}")
             st.start()
         time.sleep(2)
     
@@ -107,6 +108,7 @@ class Engine:
         self.client_objs = []
         # iterating through every client
         for client in get_leaf_classes(BaseClient):
+            logging.debug(f"Analyzing {client}")
             # checking if client is activated in YAML config file
             if self._client_params and client.NAME in self._client_params:
                 logging.debug(f"Launching {client.NAME}")
