@@ -87,7 +87,7 @@ class PolymarketGateway(Gateway):
             resp_l = json.loads(message)
             for resp in resp_l:
                 if isinstance(resp, dict) and resp["event_type"] in ["book", "price_change"]:
-                    filename = f"data/polymarket_ws_markets/{resp["asset_id"]}.log"
+                    filename = f"data/polymarket_ws_markets/{resp['asset_id']}.log"
                     if not os.path.exists(filename):
                         open(filename, "x")
                     with open(filename, "a") as f:
