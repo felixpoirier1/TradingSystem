@@ -102,3 +102,7 @@ temp.py
 .config/kalshi-api-key.key
 
 .DS_Store
+
+# output files
+main.pid
+nohup.out
