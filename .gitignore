@@ -103,4 +103,9 @@ temp.py
 
 .DS_Store
 
+# output files
+main.pid
+nohup.out
+
+
 *.key

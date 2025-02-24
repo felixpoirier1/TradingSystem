@@ -53,7 +53,7 @@ class Engine:
         
         self._general_params = vars(self.parser.parse_args())
         self._general_params["verbose"] = True if self._general_params["verbose"] == "true" else False
-
+        self._general_params["interactive"] = True if self._general_params["interactive"] == "true" else False
         self.template=yaml.safe_load(open(self._LOGGING_PARAMS_PATH, "r"))
 
     def _setup_db(self):
@@ -69,7 +69,13 @@ class Engine:
         logging.debug("Launching client threads")
         self._launch_clients()
         logging.debug("Launching CLI interface")
-        self.run()
+        logging.debug(f"Running with interactive set to {self._general_params['interactive']}")
+        if self._general_params['interactive']:
+            logging.debug("launching with interactive mode")
+            self.run()
+        else:
+            while True:
+                pass
 
     def run(self):
         while True:
