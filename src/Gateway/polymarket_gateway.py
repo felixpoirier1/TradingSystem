@@ -8,13 +8,14 @@ import json
 import time
 from datetime import datetime, timedelta
 from threading import Lock, Thread, Event
-from websocket import WebSocketApp, WebSocketConnectionClosedException
+import websockets
+from websockets.exceptions import ConnectionClosed
+import asyncio
 import requests
 from typing import List, Dict
 import logging
 
 from .base_gateway import Gateway
-from trading.order_types import Side
 
 class PolymarketGateway(Gateway):
     NAME = "PolymarketGateway"
@@ -26,6 +27,8 @@ class PolymarketGateway(Gateway):
     _markets_dir = "data/polymarket_markets.json"
     _chain_id = POLYGON
     def __init__(self, subscribed_markets: List[str]):
+        websockets_logger = logging.getLogger('websockets')
+        websockets_logger.setLevel(logging.INFO) # Set websockets logger to INFO
         self.markets = None
         self.markets_last_updated = datetime.min
         if os.path.isfile(self._markets_dir):
@@ -61,26 +64,20 @@ class PolymarketGateway(Gateway):
         self.client = ClobClient(self._rest_host, key=self._api_key, chain_id=chain_id)
         self.client.set_api_creds(self.client.create_or_derive_api_creds())
 
-    def ping(self, ws):
-        while not self.ping_thread_stop_event.is_set():
-            try:
-                time.sleep(5)
-                ws.send("PING")
-            except WebSocketConnectionClosedException:
-                logging.debug("Ping thread detected closed connection, exiting.")
-                break
-            except Exception as e:
-                logging.error(f"Error in ping thread: {e}")
-                break
-    
-    def __stream_market_on_open(self, ws: WebSocketApp):
-        logging.debug("Polymarket stream connection opened")
-        ws.send(json.dumps(self.market_subscription_message))
-        self.ping_thread_stop_event = Event() 
-        self.ping_thread = Thread(target=self.ping, args=(ws,))
-        self.ping_thread.start()
+    async def ping(self, ws):
+        try:
+            while True:
+                await ws.send("PING")
+                await asyncio.sleep(5)
+        except Exception as e:
+            logging.error(f"Error in ping thread: {e}")
+            raise e
 
-    def __stream_market_on_message(self, ws, message):
+    async def __stream_market_on_open(self, ws: websockets.WebSocketClientProtocol):
+        await ws.send(json.dumps(self.market_subscription_message))
+        self.ping_task = asyncio.create_task(self.ping(ws)) 
+
+    async def __stream_market_on_message(self, message):
         try:
             if (isinstance(message, list) and len(message) == 0) or (isinstance(message, str) and message == "PONG"):
                 return
@@ -93,18 +90,15 @@ class PolymarketGateway(Gateway):
                     with open(filename, "a") as f:
                         f.write(json.dumps(resp) + "\n")
         except Exception as e:
-            print(e)
+            logging.error(f"Error in stream market on message: {e}")
             
-    def __stream_market_on_error(self, ws, error):
-        logging.error("Error was sent")
+    async def __stream_market_on_error(self, ws, error):
+        logging.error("Error was sent from the server")
 
-    def __stream_market_on_close(self, ws, close_status_code, close_msg):
+    async def __stream_market_on_close(self, ws, close_status_code, close_msg):
         logging.info(f"WebSocket closed: {close_status_code}, {close_msg}. Reconnecting...")
         # ensure ping thread is stopped
-        self.ping_thread_stop_event.set()
-        if self.ping_thread:
-            self.ping_thread.join()
-            self.ping_thread = None
+        self.ping_task.cancel()
 
         self.last_retry = getattr(self, "last_retry", datetime.min)
 
@@ -121,28 +115,40 @@ class PolymarketGateway(Gateway):
         # try to connect otherwise, using exponential wait times
         else:
             time.sleep(min(2**(self.retry_count), 60))
-            self.__stream_market()
+            await self.__stream_market()
 
-    def __stream_market(self):
-        ws = WebSocketApp(f"{self._stream_host}/ws/market",
-            on_open = self.__stream_market_on_open,
-            on_message = self.__stream_market_on_message,
-            on_error = self.__stream_market_on_error,
-            on_close = self.__stream_market_on_close)
-        self.market_subscription_message = {
-            "auth": None,
-            "type": "market",
-            "assets_ids": self.subscribed_markets
-        }
-        ws.run_forever()
+    async def __stream_market(self):
+        try:
+            self.market_subscription_message = {
+                "auth": None,
+                "type": "market",
+                "assets_ids": self.subscribed_markets
+            }
+            async with websockets.connect(f"{self._stream_host}/ws/market") as ws:
+                await self.__stream_market_on_open(ws)
+                async for message in ws:
+                    await self.__stream_market_on_message(message)
+        except websockets.ConnectionClosed as e:
+            logging.error(f"WebSocket connection closed: {e.code}, {e.reason}")
+            await self.__stream_market_on_close(ws, e.code, e.reason)
+        except Exception as e:
+            logging.error(f"WebSocket error: {e}")
+            await self.__stream_market_on_error(ws, e)
 
-    def beginStream(self):
+    async def beginStream(self):
         self.__connect()
-        self.__market_th = Thread(target=self.__stream_market)
-        self.__market_th.start()
+        await self.__stream_market()
 
-    def endStream(self):
-        pass
+    async def endStream(self):
+        if hasattr(self, 'ping_task') and self.ping_task:
+            self.ping_task.cancel()
+            try:
+                await self.ping_task
+            except asyncio.CancelledError:
+                logging.info("Ping task cancelled")
+        if hasattr(self, 'ws') and self.ws:
+            await self.ws.close()
+            logging.info("Websocket closed by endStream")
     
     def _download_markets(self, obj_vector, evt: Event):
         # download from polymarket
