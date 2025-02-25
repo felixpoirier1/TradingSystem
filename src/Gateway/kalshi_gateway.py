@@ -1,39 +1,45 @@
 import dotenv
 import os
 
-from py_clob_client.client import ClobClient
-from py_clob_client.constants import POLYGON
-
 import json
 import time
 from datetime import datetime, timedelta
-from threading import Lock, Thread, Event
-from websocket import WebSocketApp, WebSocketConnectionClosedException
-import asyncio
-
-from .base_gateway import Gateway
-from trading.order_types import Side
-from typing import List, Dict
+from threading import Thread, Event
+import websockets
 import logging
-from utils.kalshi_api_key_decryption import load_private_key_from_file
 import requests as r
+
+from typing import List, Dict
+from enum import Enum
+
 import base64
 from cryptography.hazmat.primitives import hashes
-from cryptography.hazmat.primitives.asymmetric import padding, rsa
+from cryptography.hazmat.primitives.asymmetric import padding
+from cryptography.hazmat.primitives import serialization
 from cryptography.exceptions import InvalidSignature
 
+from .base_gateway import Gateway
+
+class Environment(Enum):
+    DEMO = "demo"
+    PROD = "prod"
 
 class KalshiGateway(Gateway):
     NAME = "KalshiGateway"
     dotenv.load_dotenv(".config/.env")
-    _api_key_filepath = ".config/kalshi-api-key.key"
-    _api_key = load_private_key_from_file(_api_key_filepath)
-    _api_key_id = os.environ["KALSHI_API_KEY_ID"]
-    _rest_host = "https://api.elections.kalshi.com"
-    _stream_host = "wss://api.elections.kalshi.com"
-    _markets_dir = "data/kalshi_markets.json"
 
-    def __init__(self, subscribed_markets: List[str]):
+    def __init__(self, subscribed_markets: List[str], environment: str = "demo"):
+        websockets_logger = logging.getLogger('websockets')
+        websockets_logger.setLevel(logging.INFO)
+        logging.debug(f"environment: {environment}")
+        environment = Environment(environment)
+        self._api_key_id = os.environ["KALSHI_DEMO_KEYID"] if environment == Environment.DEMO else os.environ["KALSHI_PROD_KEYID"]
+        self._api_key_filepath = os.environ["KALSHI_DEMO_KEYFILE"] if environment == Environment.DEMO else os.environ["KALSHI_PROD_KEYFILE"]
+        self._api_key = self.load_private_key_from_file(self._api_key_filepath)
+        self._rest_host = "https://api.elections.kalshi.com" if environment == Environment.PROD else "https://demo-api.kalshi.co"
+        self._stream_host = "wss://api.elections.kalshi.com" if environment == Environment.PROD else "wss://demo-api.kalshi.co"
+        self._markets_dir = "data/kalshi_markets.json"
+
         self.markets = None
         self.markets_last_updated = datetime.min
         if os.path.isfile(self._markets_dir):
@@ -55,7 +61,6 @@ class KalshiGateway(Gateway):
         current_time_milliseconds = int(time.time() * 1000)
         timestamp_str = str(current_time_milliseconds)
         msg_string = timestamp_str + method + path  # String to be signed
-        logging.info(f"msg_string: {msg_string}")  # Print for inspection
 
         sig = self.__sign_pss_text(msg_string)
 
@@ -65,9 +70,16 @@ class KalshiGateway(Gateway):
             'KALSHI-ACCESS-SIGNATURE': sig,
             'KALSHI-ACCESS-TIMESTAMP': timestamp_str
         }
-        logging.info(str(headers))
         return headers
-
+    
+    def load_private_key_from_file(self, file_path):
+        with open(file_path, "rb") as key_file:
+            private_key = serialization.load_pem_private_key(
+                key_file.read(),
+                password=None,  # Or your password if the key is encrypted
+            )
+        return private_key
+    
     def __sign_pss_text(self, text: str) -> str:
         """Signs the text using RSA-PSS and returns the base64 encoded signature."""
         message = text.encode('utf-8')
@@ -143,31 +155,24 @@ class KalshiGateway(Gateway):
         except KeyboardInterrupt:
             self.__market_th.join()
     
-    def __stream_market_on_open(self, ws: WebSocketApp):
+    async def __stream_market_on_open(self, ws: websockets.WebSocketClientProtocol):
         logging.debug("Kalshi stream connection opened")
-        ws.send(json.dumps(self.market_subscription_message))
+        await ws.send(json.dumps(self.market_subscription_message))
+        self.msg_id += 1
 
-    def __stream_market_on_message(self, ws, message):
-        # try:
-        #     if (isinstance(message, list) and len(message) == 0) or (isinstance(message, str) and message == "PONG"):
-        #         return
-        #     resp_l = json.loads(message)
-        #     for resp in resp_l:
-        #         if isinstance(resp, dict) and resp["event_type"] in ["book", "price_change"]:
-        #             filename = f"data/polymarket_ws_markets/{resp["asset_id"]}.log"
-        #             if not os.path.exists(filename):
-        #                 open(filename, "x")
-        #             with open(filename, "a") as f:
-        #                 f.write(json.dumps(resp) + "\n")
-        # except Exception as e:
-        #     print(e)
-        logging.debug(str(message))
-            
-    def __stream_market_on_error(self, ws, error):
+    async def __stream_market_on_message(self, message):
+        try:
+            logging.debug(json.dumps(message))
+        except Exception as e:
+            logging.error(f"Error in stream market on message: {e}")
+
+    async def __stream_market_on_error(self, error):
         logging.error(f"Error was sent:\n{error}")
 
-    def __stream_market_on_close(self, ws, close_status_code, close_msg):
+    async def __stream_market_on_close(self, close_status_code, close_msg):
         logging.info(f"WebSocket closed: {close_status_code}, {close_msg}. Reconnecting...")
+        # ensure ping thread is stopped
+        self.ping_task.cancel()
 
         self.last_retry = getattr(self, "last_retry", datetime.min)
 
@@ -184,32 +189,33 @@ class KalshiGateway(Gateway):
         # try to connect otherwise, using exponential wait times
         else:
             time.sleep(min(2**(self.retry_count), 60))
-            self.__stream_market()
+            await self.__stream_market()
 
-    def __stream_market(self):
-        url_suffix = "/trade-api/ws/v2"
-        logging.info(f"{self._stream_host}{url_suffix}")
-        ws = WebSocketApp(f"{self._stream_host}{url_suffix}",
-            header = self.__header("GET", url_suffix),
-            on_open = self.__stream_market_on_open,
-            on_message = self.__stream_market_on_message,
-            on_error = self.__stream_market_on_error,
-            on_close = self.__stream_market_on_close)
-        logging.debug(self.subscribed_markets)
-        self.market_subscription_message = {
-            "id": self.msg_id,
-            "cmd": "subscribe",
-            "params": {
-                'channels': ['orderbook_delta'],
-                'market_tickers': self.subscribed_markets
+    async def __stream_market(self):
+        try:
+            headers = self.__header("GET", "/trade-api/ws/v2")
+            url_suffix = "/trade-api/ws/v2"
+            self.market_subscription_message = {
+                "id": self.msg_id,
+                "cmd": "subscribe",
+                "params": {
+                    'channels': ['orderbook_delta'],
+                    'market_tickers': self.subscribed_markets
+                }
             }
-        }
-        logging.debug("Launching websocket")
-        ws.run_forever()
+            async with websockets.connect(f"{self._stream_host}{url_suffix}", additional_headers=headers) as ws:
+                await self.__stream_market_on_open(ws)
+                async for message in ws:
+                    await self.__stream_market_on_message(message)
+        except websockets.ConnectionClosed as e:
+            logging.error(f"WebSocket connection closed: {e.code}, {e.reason}")
+            await self.__stream_market_on_close(e.code, e.reason)
+        except Exception as e:
+            logging.error(f"WebSocket error: {e}")
+            await self.__stream_market_on_error(e)
 
-    def beginStream(self):
-        self.__market_th = Thread(target=self.__stream_market)
-        self.__market_th.start()
+    async def beginStream(self):
+        await self.__stream_market()
 
     def endStream(self):
         pass
