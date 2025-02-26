@@ -2,7 +2,7 @@ Polymarket Market Maker Strategy:
   last_updated: '2025-01-15 02:48:07'
   gateways: 
     - PolymarketGateway
-Kalshi Market Maker Strategy:
-  last_updated: '2025-01-15 02:48:07'
-  gateways: 
-    - KalshiGateway
+# Kalshi Market Maker Strategy:
+#   last_updated: '2025-01-15 02:48:07'
+#   gateways: 
+#     - KalshiGateway
