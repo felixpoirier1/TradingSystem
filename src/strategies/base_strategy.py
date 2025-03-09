@@ -1,6 +1,6 @@
-from Gateway import Gateway
+from gateways import Gateway
 from threading import Event
-from Client import BaseClient
+from clients import BaseClient
 import yaml
 import datetime as dt
 import sqlite3

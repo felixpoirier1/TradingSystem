@@ -1,7 +1,7 @@
 from .base_strategy import BaseStrategy
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
-from Gateway import Gateway
+from gateways import Gateway
 from sklearn.linear_model import LinearRegression
 import time
 import os

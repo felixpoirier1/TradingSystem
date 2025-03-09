@@ -8,6 +8,7 @@ from threading import Thread, Event
 import websockets
 import logging
 import requests as r
+import traceback
 
 from typing import List, Dict
 from enum import Enum
@@ -18,6 +19,7 @@ from cryptography.hazmat.primitives.asymmetric import padding
 from cryptography.hazmat.primitives import serialization
 from cryptography.exceptions import InvalidSignature
 
+from trading.orderbooks import PredictionMarketOrderBook, Side, Action
 from .base_gateway import Gateway
 
 class Environment(Enum):
@@ -28,9 +30,11 @@ class KalshiGateway(Gateway):
     NAME = "KalshiGateway"
     dotenv.load_dotenv(".config/.env")
 
-    def __init__(self, subscribed_markets: List[str], environment: str = "demo"):
+    def __init__(self, subscribed_markets: List[str] = [], environment: str = "demo"):
         websockets_logger = logging.getLogger('websockets')
         websockets_logger.setLevel(logging.INFO)
+        self.ws = None
+
         logging.debug(f"environment: {environment}")
         environment = Environment(environment)
         self._api_key_id = os.environ["KALSHI_DEMO_KEYID"] if environment == Environment.DEMO else os.environ["KALSHI_PROD_KEYID"]
@@ -39,7 +43,7 @@ class KalshiGateway(Gateway):
         self._rest_host = "https://api.elections.kalshi.com" if environment == Environment.PROD else "https://demo-api.kalshi.co"
         self._stream_host = "wss://api.elections.kalshi.com" if environment == Environment.PROD else "wss://demo-api.kalshi.co"
         self._markets_dir = "data/kalshi_markets.json"
-
+        
         self.markets = None
         self.markets_last_updated = datetime.min
         if os.path.isfile(self._markets_dir):
@@ -56,6 +60,23 @@ class KalshiGateway(Gateway):
         self.subscribed_markets = subscribed_markets
         self.market_msgs: Dict[str, List] = {id: [] for id in self.subscribed_markets}
         self.msg_id = 1
+    
+    def _process_kalshi_book_msg(self, message: dict):
+        try:
+            if message["event_type"] == "book":
+                return [(Action.REINIT, {"bids": [(int(float(pl['price'])*1000), float(pl['size'])) for pl in message["bids"]], "asks": [(int(float(pl['price'])*1000), float(pl['size'])) for pl in message["asks"]]})]
+            elif message["event_type"] == "price_change":
+                return [(Action.MODIFY, {"price": int(float(msg["price"]) * 1000), "side": Side.ASK if msg["side"] == "SELL" else Side.BID, "size": int(float(msg["size"]) * 1000)}) for msg in message["changes"]]
+            elif message["event_type"] == "tick":
+                return [(Action.TICK, {"tick_size": int(1000*float(message["new_tick_size"]))})]
+            else:
+                return []
+        except Exception as e:
+            tb = traceback.extract_tb(e.__traceback__) 
+            logging.error(f"Error processing polymarket book message: {[t for t in tb]}")
+            logging.error(f"Message: {message}")
+            return []
+            
 
     def __header(self, method, path):
         current_time_milliseconds = int(time.time() * 1000)
@@ -97,7 +118,7 @@ class KalshiGateway(Gateway):
             raise ValueError("RSA sign PSS failed") from e
         
     def __get(self, endpoint, params, headers = None, ret_type="json"):
-        path = KalshiGateway._rest_host + endpoint
+        path = self._rest_host + endpoint
         if headers is None:
             headers = self.__header("GET", path)
         resp = r.get(path, params=params, headers=headers)
@@ -105,6 +126,9 @@ class KalshiGateway(Gateway):
             return resp.json()
         else:
             return resp
+        
+    def GET(self, endpoint, params, headers = None, ret_type="json"):
+        return self.__get(endpoint, params, headers, ret_type)
 
     def _download_markets(self, obj_vector, evt: Event):
         # download from polymarket
@@ -148,12 +172,6 @@ class KalshiGateway(Gateway):
         
     def attachFeed(self, feed):
         self.feed = feed
-
-    def runMarketStream(self):
-        try:
-            self.__market_th.run()
-        except KeyboardInterrupt:
-            self.__market_th.join()
     
     async def __stream_market_on_open(self, ws: websockets.WebSocketClientProtocol):
         logging.debug("Kalshi stream connection opened")
@@ -162,7 +180,8 @@ class KalshiGateway(Gateway):
 
     async def __stream_market_on_message(self, message):
         try:
-            logging.debug(json.dumps(message))
+            pass
+            # logging.debug(json.dumps(message))
         except Exception as e:
             logging.error(f"Error in stream market on message: {e}")
 
@@ -204,6 +223,7 @@ class KalshiGateway(Gateway):
                 }
             }
             async with websockets.connect(f"{self._stream_host}{url_suffix}", additional_headers=headers) as ws:
+                self.ws = ws
                 await self.__stream_market_on_open(ws)
                 async for message in ws:
                     await self.__stream_market_on_message(message)
@@ -217,5 +237,8 @@ class KalshiGateway(Gateway):
     async def beginStream(self):
         await self.__stream_market()
 
-    def endStream(self):
-        pass
+    async def endStream(self):
+        if hasattr(self, 'ws') and self.ws:
+            await self.ws.close()
+            logging.info("Websocket closed by endStream")
+            self.ws = None

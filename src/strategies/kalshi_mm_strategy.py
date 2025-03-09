@@ -1,7 +1,7 @@
 from .base_strategy import BaseStrategy
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
-from Gateway import KalshiGateway
+from gateways import KalshiGateway
 from sklearn.linear_model import LinearRegression
 from typing import List
 
@@ -13,8 +13,8 @@ class KalshiMMStrategy(BaseStrategy):
             raise Exception("PolymarketMMStrategy only works with KalshiGateway")
         super().__init__(gateways, **kwargs)
 
-    def begin(self):
-        super().begin()
+    async def begin(self):
+        await super().begin()
         self._app : KalshiGateway = self._gateways[0]
     #     obj = self._app.getMarkets(download=False)
     #     if isinstance(obj, tuple):
@@ -22,7 +22,8 @@ class KalshiMMStrategy(BaseStrategy):
     #         markets = obj[1]
     #     else:
     #         markets = obj
-
+    async def end(self):
+        self._eflag.clear()
     # def main(self):
     #     pass
         

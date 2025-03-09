@@ -1,6 +1,7 @@
-from Gateway import KalshiGateway
-from Engine import Engine
+from gateways import KalshiGateway
+from engine import Engine
 import asyncio
+
 async def main():
     engine = Engine()
     await engine.launch()
